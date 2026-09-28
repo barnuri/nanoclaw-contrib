@@ -73,7 +73,7 @@ export async function run(_args: string[]): Promise<void> {
     });
   }
 
-  warnIfProxyUnsupported(projectRoot, nodePath);
+  proxyStatusFields = proxyStatus(projectRoot, nodePath);
 
   if (platform === 'macos') {
     setupLaunchd(projectRoot, nodePath, homeDir);
@@ -97,36 +97,18 @@ export async function run(_args: string[]): Promise<void> {
 const PROXY_KEYS = ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'];
 // Node's fetch only matches IPv6 NO_PROXY entries written in brackets; http.get matches the bare form.
 const DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
-// First Node release that honors NODE_USE_ENV_PROXY; older 22.x ignores it and goes direct.
-const MIN_ENV_PROXY_NODE = [22, 21];
-
-/**
- * True for hosts that are reachable without the proxy: loopback, docker
- * bridge and RFC 1918 ranges, link-local, CGNAT (tailnets), single-label
- * names and .local names.
- */
-function isLocalHost(host: string): boolean {
-  return (
-    host === 'localhost' ||
-    host === 'host.docker.internal' ||
-    host === '::1' ||
-    host.endsWith('.local') ||
-    (!host.includes('.') && !host.includes(':')) ||
-    /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)
-  );
-}
 
 /**
  * Environment the host needs to reach the internet through an outbound proxy.
  * Node ignores HTTPS_PROXY unless NODE_USE_ENV_PROXY is set when the process
  * boots, so it has to come from the service definition, not from the host's
  * own startup code. Each key resolves on its own, setup shell over .env, and
- * falls back to ALL_PROXY and then to the other key. A local gateway host
- * (ONECLI_URL) and any user NO_PROXY entries are added to the loopback
+ * falls back to ALL_PROXY and then to the other key. NO_PROXY entries (from
+ * the user or written to .env by a gateway skill) are added to the loopback
  * defaults. Returns an empty object when no proxy is configured.
  */
 export function hostProxyEnv(projectRoot: string, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const fromFile = readEnvFile([...PROXY_KEYS, 'NO_PROXY', 'ONECLI_URL'], projectRoot);
+  const fromFile = readEnvFile([...PROXY_KEYS, 'NO_PROXY'], projectRoot);
   const pick = (key: string): string | undefined =>
     (env[key] || env[key.toLowerCase()] || fromFile[key])?.trim() || undefined;
   // Node's built-in proxy support only speaks to http(s) proxies.
@@ -138,15 +120,7 @@ export function hostProxyEnv(projectRoot: string, env: NodeJS.ProcessEnv = proce
   const httpProxy = proxy('HTTP_PROXY') ?? proxy('ALL_PROXY') ?? proxy('HTTPS_PROXY');
   if (!httpsProxy || !httpProxy) return {};
 
-  // A remote gateway has to keep going through the proxy on a proxy-only network.
-  let gatewayHost: string | undefined;
-  try {
-    const gatewayUrl = pick('ONECLI_URL');
-    gatewayHost = gatewayUrl ? new URL(gatewayUrl).hostname.replace(/^\[|\]$/g, '') : undefined;
-  } catch {
-    gatewayHost = undefined;
-  }
-  const bypass = [DEFAULT_NO_PROXY, gatewayHost && isLocalHost(gatewayHost) ? gatewayHost : undefined, pick('NO_PROXY')]
+  const bypass = [DEFAULT_NO_PROXY, pick('NO_PROXY')]
     .flatMap((list) => (list ?? '').split(','))
     .map((entry) => entry.trim())
     .filter(Boolean);
@@ -159,28 +133,39 @@ export function hostProxyEnv(projectRoot: string, env: NodeJS.ProcessEnv = proce
   };
 }
 
-/** Whether a Node version (e.g. "22.20.0") honors NODE_USE_ENV_PROXY. */
+/**
+ * Whether a Node version (e.g. "22.20.0") honors NODE_USE_ENV_PROXY for both
+ * fetch and http(s). 22.21+ does; 23.x ignores it; 24.0-24.4 only proxies fetch.
+ */
 export function nodeHonorsEnvProxy(version: string): boolean {
   const [major, minor] = version.split('.').map(Number);
-  return major > MIN_ENV_PROXY_NODE[0] || (major === MIN_ENV_PROXY_NODE[0] && minor >= MIN_ENV_PROXY_NODE[1]);
+  if (major === 22) return minor >= 21;
+  if (major === 24) return minor >= 5;
+  return major >= 25;
 }
 
-function warnIfProxyUnsupported(projectRoot: string, nodePath: string): void {
-  if (Object.keys(hostProxyEnv(projectRoot)).length === 0) return;
+/**
+ * Status fields for SETUP_SERVICE: PROXY=ignored_by_node when a proxy is
+ * configured but the service's Node won't use it, so the wizard can say so.
+ */
+function proxyStatus(projectRoot: string, nodePath: string): Record<string, string> {
+  if (Object.keys(hostProxyEnv(projectRoot)).length === 0) return {};
   let version: string;
   try {
     version = execFileSync(nodePath, ['-p', 'process.versions.node'], { encoding: 'utf8' }).trim();
   } catch {
-    return;
+    return {};
   }
-  if (!nodeHonorsEnvProxy(version)) {
-    log.warn('An outbound proxy is configured but this Node ignores NODE_USE_ENV_PROXY; the host will go direct', {
-      nodePath,
-      version,
-      required: MIN_ENV_PROXY_NODE.join('.'),
-    });
-  }
+  if (nodeHonorsEnvProxy(version)) return {};
+  log.warn('An outbound proxy is configured but this Node ignores NODE_USE_ENV_PROXY; the host will go direct', {
+    nodePath,
+    version,
+  });
+  return { PROXY: 'ignored_by_node', PROXY_NODE_VERSION: version };
 }
+
+// Set once per run so every service type reports it in SETUP_SERVICE.
+let proxyStatusFields: Record<string, string> = {};
 
 function xmlEscape(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -317,6 +302,7 @@ function setupLaunchd(projectRoot: string, nodePath: string, homeDir: string): v
     PLIST_PATH: plistPath,
     SERVICE_LOADED: serviceLoaded,
     STATUS: 'success',
+    ...proxyStatusFields,
     LOG: 'logs/setup.log',
   });
 }
@@ -519,6 +505,7 @@ async function setupSystemd(projectRoot: string, nodePath: string, homeDir: stri
     UNIT_PATH: unitPath,
     SERVICE_LOADED: serviceLoaded,
     ...(dockerGroupStale ? { DOCKER_GROUP_STALE: true } : {}),
+    ...proxyStatusFields,
     LINGER_ENABLED: !runningAsRoot,
     STATUS: 'success',
     LOG: 'logs/setup.log',
@@ -617,7 +604,12 @@ socket.setTimeout(1000, () => {
 });
 `)} ${shellQuote(path.join(projectRoot, 'data', 'ncl.sock'))}`,
     '',
-    ...Object.entries(hostProxyEnv(projectRoot)).map(([key, value]) => `export ${key}=${shellQuote(value)}`),
+    // The wrapper inherits the caller's shell, and Node prefers the lowercase names.
+    ...Object.entries(hostProxyEnv(projectRoot)).flatMap(([key, value]) =>
+      (key === 'NODE_USE_ENV_PROXY' ? [key] : [key, key.toLowerCase()]).map(
+        (name) => `export ${name}=${shellQuote(value)}`,
+      ),
+    ),
     'echo "Starting NanoClaw..."',
     // Node resets the inherited SIGHUP ignore; detach from the wizard terminal.
     `setsid nohup ${shellQuote(nodePath)} ${shellQuote(entrypoint)} \\`,
@@ -647,6 +639,7 @@ socket.setTimeout(1000, () => {
     WRAPPER_PATH: wrapperPath,
     SERVICE_LOADED: !failure,
     FALLBACK: 'no_usable_systemd',
+    ...proxyStatusFields,
     STATUS: failure ? 'failed' : 'success',
     ...(failure ? { ERROR: 'service_start_failed' } : {}),
     LOG: 'logs/setup.log',

@@ -167,16 +167,6 @@ describe('hostProxyEnv', () => {
     });
   });
 
-  it('bypasses a local gateway host but keeps a remote one on the proxy', () => {
-    const proxy = { HTTPS_PROXY: 'http://proxy.example:3128' };
-    expect(hostProxyEnv(root, { ...proxy, ONECLI_URL: 'http://172.17.0.1:10254' }).NO_PROXY).toBe(
-      'localhost,127.0.0.1,::1,[::1],172.17.0.1',
-    );
-    expect(hostProxyEnv(root, { ...proxy, ONECLI_URL: 'https://onecli.corp.example' }).NO_PROXY).toBe(
-      'localhost,127.0.0.1,::1,[::1]',
-    );
-  });
-
   it('adds a user NO_PROXY to the defaults instead of replacing them', () => {
     const env = { HTTPS_PROXY: 'http://proxy.example:3128', NO_PROXY: ' .corp.example, localhost ' };
     expect(hostProxyEnv(root, env).NO_PROXY).toBe('localhost,127.0.0.1,::1,[::1],.corp.example');
@@ -197,11 +187,9 @@ describe('hostProxyEnv', () => {
 });
 
 describe('nodeHonorsEnvProxy', () => {
-  it('requires Node 22.21 or newer', () => {
-    expect(nodeHonorsEnvProxy('22.20.0')).toBe(false);
-    expect(nodeHonorsEnvProxy('22.21.0')).toBe(true);
-    expect(nodeHonorsEnvProxy('24.0.0')).toBe(true);
-    expect(nodeHonorsEnvProxy('20.19.0')).toBe(false);
+  it('accepts 22.21+, 24.5+ and 25+ only', () => {
+    for (const v of ['22.21.0', '22.22.1', '24.5.0', '25.0.0']) expect(nodeHonorsEnvProxy(v)).toBe(true);
+    for (const v of ['20.19.0', '22.20.0', '23.11.1', '24.0.0', '24.4.1']) expect(nodeHonorsEnvProxy(v)).toBe(false);
   });
 });
 
@@ -212,7 +200,7 @@ describe('renderSystemdUnit', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-unit-'));
     saved = { ...process.env };
-    for (const key of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'ONECLI_URL']) {
+    for (const key of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY']) {
       delete process.env[key];
       delete process.env[key.toLowerCase()];
     }
