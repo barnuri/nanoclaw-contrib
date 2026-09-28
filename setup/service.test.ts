@@ -5,7 +5,7 @@ import path from 'path';
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 
 import { getLaunchdLabel } from '../src/install-slug.js';
-import { hostProxyEnv } from './service.js';
+import { hostProxyEnv, nodeHonorsEnvProxy, renderSystemdUnit } from './service.js';
 
 /**
  * Tests for service configuration generation.
@@ -143,29 +143,96 @@ describe('hostProxyEnv', () => {
       NODE_USE_ENV_PROXY: '1',
       HTTPS_PROXY: 'http://proxy.example:3128',
       HTTP_PROXY: 'http://proxy.example:3128',
-      NO_PROXY: 'localhost,127.0.0.1,::1',
+      NO_PROXY: 'localhost,127.0.0.1,::1,[::1]',
     });
   });
 
-  it('prefers HTTPS_PROXY, then HTTP_PROXY, then ALL_PROXY', () => {
-    const env = { HTTP_PROXY: 'http://http.example:1', ALL_PROXY: 'http://all.example:2' };
-    expect(hostProxyEnv(root, env).HTTPS_PROXY).toBe('http://http.example:1');
-    expect(hostProxyEnv(root, { ALL_PROXY: 'http://all.example:2' }).HTTPS_PROXY).toBe('http://all.example:2');
-    expect(hostProxyEnv(root, { https_proxy: 'http://lower.example:3', ...env }).HTTPS_PROXY).toBe(
-      'http://lower.example:3',
+  it('resolves HTTPS_PROXY and HTTP_PROXY separately, falling back to ALL_PROXY, then the other key', () => {
+    const both = hostProxyEnv(root, { HTTPS_PROXY: 'http://s.example:1', HTTP_PROXY: 'http://h.example:2' });
+    expect(both).toMatchObject({ HTTPS_PROXY: 'http://s.example:1', HTTP_PROXY: 'http://h.example:2' });
+    const all = hostProxyEnv(root, { HTTPS_PROXY: 'http://s.example:1', ALL_PROXY: 'http://all.example:3' });
+    expect(all).toMatchObject({ HTTPS_PROXY: 'http://s.example:1', HTTP_PROXY: 'http://all.example:3' });
+    expect(hostProxyEnv(root, { HTTP_PROXY: 'http://h.example:2' })).toMatchObject({
+      HTTPS_PROXY: 'http://h.example:2',
+      HTTP_PROXY: 'http://h.example:2',
+    });
+    expect(hostProxyEnv(root, { https_proxy: 'http://lower.example:4' }).HTTPS_PROXY).toBe('http://lower.example:4');
+  });
+
+  it('resolves each key shell-over-file', () => {
+    fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://file.example:1\n');
+    expect(hostProxyEnv(root, { HTTP_PROXY: 'http://shell.example:2' })).toMatchObject({
+      HTTPS_PROXY: 'http://file.example:1',
+      HTTP_PROXY: 'http://shell.example:2',
+    });
+  });
+
+  it('bypasses a local gateway host but keeps a remote one on the proxy', () => {
+    const proxy = { HTTPS_PROXY: 'http://proxy.example:3128' };
+    expect(hostProxyEnv(root, { ...proxy, ONECLI_URL: 'http://172.17.0.1:10254' }).NO_PROXY).toBe(
+      'localhost,127.0.0.1,::1,[::1],172.17.0.1',
     );
+    expect(hostProxyEnv(root, { ...proxy, ONECLI_URL: 'https://onecli.corp.example' }).NO_PROXY).toBe(
+      'localhost,127.0.0.1,::1,[::1]',
+    );
+  });
+
+  it('adds a user NO_PROXY to the defaults instead of replacing them', () => {
+    const env = { HTTPS_PROXY: 'http://proxy.example:3128', NO_PROXY: ' .corp.example, localhost ' };
+    expect(hostProxyEnv(root, env).NO_PROXY).toBe('localhost,127.0.0.1,::1,[::1],.corp.example');
   });
 
   it('reads .env when the environment has no proxy, and the environment wins over .env', () => {
     fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://file.example:8080\nNO_PROXY=localhost,.internal\n');
     expect(hostProxyEnv(root, {})).toMatchObject({
       HTTPS_PROXY: 'http://file.example:8080',
-      NO_PROXY: 'localhost,.internal',
+      NO_PROXY: 'localhost,127.0.0.1,::1,[::1],.internal',
     });
     expect(hostProxyEnv(root, { HTTPS_PROXY: 'http://shell.example:1' }).HTTPS_PROXY).toBe('http://shell.example:1');
   });
 
   it('skips proxies Node cannot use', () => {
     expect(hostProxyEnv(root, { ALL_PROXY: 'socks5://127.0.0.1:1080' })).toEqual({});
+  });
+});
+
+describe('nodeHonorsEnvProxy', () => {
+  it('requires Node 22.21 or newer', () => {
+    expect(nodeHonorsEnvProxy('22.20.0')).toBe(false);
+    expect(nodeHonorsEnvProxy('22.21.0')).toBe(true);
+    expect(nodeHonorsEnvProxy('24.0.0')).toBe(true);
+    expect(nodeHonorsEnvProxy('20.19.0')).toBe(false);
+  });
+});
+
+describe('renderSystemdUnit', () => {
+  let root: string;
+  let saved: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-unit-'));
+    saved = { ...process.env };
+    for (const key of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'ONECLI_URL']) {
+      delete process.env[key];
+      delete process.env[key.toLowerCase()];
+    }
+  });
+
+  afterEach(() => {
+    process.env = saved;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('writes quoted proxy Environment= lines when a proxy is configured', () => {
+    fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://proxy.example:3128\nNO_PROXY=a, b\n');
+    const unit = renderSystemdUnit(root, '/usr/bin/node', '/home/user', false);
+    expect(unit).toContain('Environment="NODE_USE_ENV_PROXY=1"');
+    expect(unit).toContain('Environment="HTTPS_PROXY=http://proxy.example:3128"');
+    expect(unit).toContain('Environment="HTTP_PROXY=http://proxy.example:3128"');
+    expect(unit).toContain('Environment="NO_PROXY=localhost,127.0.0.1,::1,[::1],a,b"');
+  });
+
+  it('writes no proxy lines without a proxy', () => {
+    expect(renderSystemdUnit(root, '/usr/bin/node', '/home/user', false)).not.toContain('PROXY');
   });
 });

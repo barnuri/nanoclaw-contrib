@@ -73,6 +73,8 @@ export async function run(_args: string[]): Promise<void> {
     });
   }
 
+  warnIfProxyUnsupported(projectRoot, nodePath);
+
   if (platform === 'macos') {
     setupLaunchd(projectRoot, nodePath, homeDir);
   } else if (platform === 'linux') {
@@ -93,28 +95,91 @@ export async function run(_args: string[]): Promise<void> {
 }
 
 const PROXY_KEYS = ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'];
-const DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1';
+// Node's fetch only matches IPv6 NO_PROXY entries written in brackets; http.get matches the bare form.
+const DEFAULT_NO_PROXY = 'localhost,127.0.0.1,::1,[::1]';
+// First Node release that honors NODE_USE_ENV_PROXY; older 22.x ignores it and goes direct.
+const MIN_ENV_PROXY_NODE = [22, 21];
+
+/**
+ * True for hosts that are reachable without the proxy: loopback, docker
+ * bridge and RFC 1918 ranges, link-local, CGNAT (tailnets), single-label
+ * names and .local names.
+ */
+function isLocalHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === 'host.docker.internal' ||
+    host === '::1' ||
+    host.endsWith('.local') ||
+    (!host.includes('.') && !host.includes(':')) ||
+    /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)
+  );
+}
 
 /**
  * Environment the host needs to reach the internet through an outbound proxy.
  * Node ignores HTTPS_PROXY unless NODE_USE_ENV_PROXY is set when the process
  * boots, so it has to come from the service definition, not from the host's
- * own startup code. The setup shell's environment wins over .env. Returns an
- * empty object when no proxy is configured.
+ * own startup code. Each key resolves on its own, setup shell over .env, and
+ * falls back to ALL_PROXY and then to the other key. A local gateway host
+ * (ONECLI_URL) and any user NO_PROXY entries are added to the loopback
+ * defaults. Returns an empty object when no proxy is configured.
  */
 export function hostProxyEnv(projectRoot: string, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const fromFile = readEnvFile([...PROXY_KEYS, 'NO_PROXY'], projectRoot);
+  const fromFile = readEnvFile([...PROXY_KEYS, 'NO_PROXY', 'ONECLI_URL'], projectRoot);
   const pick = (key: string): string | undefined =>
     (env[key] || env[key.toLowerCase()] || fromFile[key])?.trim() || undefined;
   // Node's built-in proxy support only speaks to http(s) proxies.
-  const proxyUrl = PROXY_KEYS.map(pick).find((url) => url && /^https?:\/\//i.test(url));
-  if (!proxyUrl) return {};
+  const proxy = (key: string): string | undefined => {
+    const url = pick(key);
+    return url && /^https?:\/\//i.test(url) ? url : undefined;
+  };
+  const httpsProxy = proxy('HTTPS_PROXY') ?? proxy('ALL_PROXY') ?? proxy('HTTP_PROXY');
+  const httpProxy = proxy('HTTP_PROXY') ?? proxy('ALL_PROXY') ?? proxy('HTTPS_PROXY');
+  if (!httpsProxy || !httpProxy) return {};
+
+  // A remote gateway has to keep going through the proxy on a proxy-only network.
+  let gatewayHost: string | undefined;
+  try {
+    const gatewayUrl = pick('ONECLI_URL');
+    gatewayHost = gatewayUrl ? new URL(gatewayUrl).hostname.replace(/^\[|\]$/g, '') : undefined;
+  } catch {
+    gatewayHost = undefined;
+  }
+  const bypass = [DEFAULT_NO_PROXY, gatewayHost && isLocalHost(gatewayHost) ? gatewayHost : undefined, pick('NO_PROXY')]
+    .flatMap((list) => (list ?? '').split(','))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
   return {
     NODE_USE_ENV_PROXY: '1',
-    HTTPS_PROXY: proxyUrl,
-    HTTP_PROXY: proxyUrl,
-    NO_PROXY: pick('NO_PROXY') ?? DEFAULT_NO_PROXY,
+    HTTPS_PROXY: httpsProxy,
+    HTTP_PROXY: httpProxy,
+    NO_PROXY: [...new Set(bypass)].join(','),
   };
+}
+
+/** Whether a Node version (e.g. "22.20.0") honors NODE_USE_ENV_PROXY. */
+export function nodeHonorsEnvProxy(version: string): boolean {
+  const [major, minor] = version.split('.').map(Number);
+  return major > MIN_ENV_PROXY_NODE[0] || (major === MIN_ENV_PROXY_NODE[0] && minor >= MIN_ENV_PROXY_NODE[1]);
+}
+
+function warnIfProxyUnsupported(projectRoot: string, nodePath: string): void {
+  if (Object.keys(hostProxyEnv(projectRoot)).length === 0) return;
+  let version: string;
+  try {
+    version = execFileSync(nodePath, ['-p', 'process.versions.node'], { encoding: 'utf8' }).trim();
+  } catch {
+    return;
+  }
+  if (!nodeHonorsEnvProxy(version)) {
+    log.warn('An outbound proxy is configured but this Node ignores NODE_USE_ENV_PROXY; the host will go direct', {
+      nodePath,
+      version,
+      required: MIN_ENV_PROXY_NODE.join('.'),
+    });
+  }
 }
 
 function xmlEscape(value: string): string {
@@ -309,6 +374,37 @@ function checkDockerGroupStale(): boolean {
   }
 }
 
+export function renderSystemdUnit(
+  projectRoot: string,
+  nodePath: string,
+  homeDir: string,
+  runningAsRoot: boolean,
+): string {
+  // systemd expands % specifiers and splits unquoted values on spaces.
+  const proxyLines = Object.entries(hostProxyEnv(projectRoot))
+    .map(([key, value]) => `\nEnvironment="${key}=${value.replace(/%/g, '%%').replace(/["\\]/g, '\\$&')}"`)
+    .join('');
+
+  return `[Unit]
+Description=NanoClaw Personal Assistant
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${nodePath} ${projectRoot}/dist/index.js
+WorkingDirectory=${projectRoot}
+Restart=always
+RestartSec=5
+KillMode=process
+Environment=HOME=${homeDir}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin${proxyLines}
+StandardOutput=append:${projectRoot}/logs/nanoclaw.log
+StandardError=append:${projectRoot}/logs/nanoclaw.error.log
+
+[Install]
+WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
+}
+
 async function setupSystemd(projectRoot: string, nodePath: string, homeDir: string): Promise<void> {
   const runningAsRoot = isRoot();
   const unitName = getSystemdUnit(projectRoot);
@@ -337,29 +433,7 @@ async function setupSystemd(projectRoot: string, nodePath: string, homeDir: stri
     systemctlPrefix = 'systemctl --user';
   }
 
-  // systemd expands % specifiers inside Environment= values.
-  const proxyLines = Object.entries(hostProxyEnv(projectRoot))
-    .map(([key, value]) => `\nEnvironment=${key}=${value.replace(/%/g, '%%')}`)
-    .join('');
-
-  const unit = `[Unit]
-Description=NanoClaw Personal Assistant
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
-WorkingDirectory=${projectRoot}
-Restart=always
-RestartSec=5
-KillMode=process
-Environment=HOME=${homeDir}
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin${proxyLines}
-StandardOutput=append:${projectRoot}/logs/nanoclaw.log
-StandardError=append:${projectRoot}/logs/nanoclaw.error.log
-
-[Install]
-WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
+  const unit = renderSystemdUnit(projectRoot, nodePath, homeDir, runningAsRoot);
 
   fs.writeFileSync(unitPath, unit);
   log.info('Wrote systemd unit', { unitPath });
