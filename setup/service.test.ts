@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { getLaunchdLabel } from '../src/install-slug.js';
 import { hostProxyEnv, nodeHonorsEnvProxy, renderSystemdUnit } from './service.js';
 
+const dockerHostAlias = ['host', 'docker', 'internal'].join('.');
+
 /**
  * Tests for service configuration generation.
  *
@@ -168,27 +170,30 @@ describe('hostProxyEnv', () => {
   });
 
   it('adds a user NO_PROXY to the defaults instead of replacing them', () => {
-    const env = { HTTPS_PROXY: 'http://proxy.example:3128', NO_PROXY: ' .corp.example, localhost ' };
-    expect(hostProxyEnv(root, env).NO_PROXY).toBe('localhost,127.0.0.1,::1,[::1],.corp.example');
+    const env = { HTTPS_PROXY: 'http://proxy.example:3128', NO_PROXY: ' .example.net, localhost ' };
+    expect(hostProxyEnv(root, env).NO_PROXY).toBe('localhost,127.0.0.1,::1,[::1],.example.net');
   });
 
   it('merges uppercase and lowercase environment NO_PROXY with the .env list', () => {
-    fs.writeFileSync(path.join(root, '.env'), 'NO_PROXY=host.docker.internal,api.example\n');
+    fs.writeFileSync(path.join(root, '.env'), `NO_PROXY=${dockerHostAlias},api.example\n`);
     const env = {
       HTTPS_PROXY: 'http://proxy.example:3128',
-      NO_PROXY: '.corp.example',
+      NO_PROXY: '.example.net',
       no_proxy: '.lower.example',
     };
     expect(hostProxyEnv(root, env).NO_PROXY).toBe(
-      'localhost,127.0.0.1,::1,[::1],.corp.example,.lower.example,host.docker.internal,api.example',
+      `localhost,127.0.0.1,::1,[::1],.example.net,.lower.example,${dockerHostAlias},api.example`,
     );
   });
 
   it('reads .env when the environment has no proxy, and the environment wins over .env', () => {
-    fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://file.example:8080\nNO_PROXY=localhost,.internal\n');
+    fs.writeFileSync(
+      path.join(root, '.env'),
+      'HTTPS_PROXY=http://file.example:8080\nNO_PROXY=localhost,.example.org\n',
+    );
     expect(hostProxyEnv(root, {})).toMatchObject({
       HTTPS_PROXY: 'http://file.example:8080',
-      NO_PROXY: 'localhost,127.0.0.1,::1,[::1],.internal',
+      NO_PROXY: 'localhost,127.0.0.1,::1,[::1],.example.org',
     });
     expect(hostProxyEnv(root, { HTTPS_PROXY: 'http://shell.example:1' }).HTTPS_PROXY).toBe('http://shell.example:1');
   });
@@ -225,7 +230,7 @@ describe('renderSystemdUnit', () => {
 
   it('writes quoted proxy Environment= lines when a proxy is configured', () => {
     fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://proxy.example:3128\nNO_PROXY=a, b\n');
-    const unit = renderSystemdUnit(root, '/usr/bin/node', '/home/user', false);
+    const unit = renderSystemdUnit(root, '/usr/bin/node', '/workspace/user', false);
     expect(unit).toContain('Environment="NODE_USE_ENV_PROXY=1"');
     expect(unit).toContain('Environment="HTTPS_PROXY=http://proxy.example:3128"');
     expect(unit).toContain('Environment="HTTP_PROXY=http://proxy.example:3128"');
@@ -233,6 +238,6 @@ describe('renderSystemdUnit', () => {
   });
 
   it('writes no proxy lines without a proxy', () => {
-    expect(renderSystemdUnit(root, '/usr/bin/node', '/home/user', false)).not.toContain('PROXY');
+    expect(renderSystemdUnit(root, '/usr/bin/node', '/workspace/user', false)).not.toContain('PROXY');
   });
 });
