@@ -72,24 +72,24 @@ WantedBy=${isSystem ? 'multi-user.target' : 'default.target'}`;
 
 describe('plist generation', () => {
   it('contains the slug-scoped label', () => {
-    const projectRoot = '/home/user/nanoclaw';
-    const plist = generatePlist('/usr/local/bin/node', projectRoot, '/home/user');
+    const projectRoot = '/workspace/user/nanoclaw';
+    const plist = generatePlist('/usr/local/bin/node', projectRoot, '/workspace/user');
     expect(plist).toContain(`<string>${getLaunchdLabel(projectRoot)}</string>`);
     expect(plist).toMatch(/<string>com\.nanoclaw-v2-[0-9a-f]{8}<\/string>/);
   });
 
   it('uses the correct node path', () => {
-    const plist = generatePlist('/opt/node/bin/node', '/home/user/nanoclaw', '/home/user');
+    const plist = generatePlist('/opt/node/bin/node', '/workspace/user/nanoclaw', '/workspace/user');
     expect(plist).toContain('<string>/opt/node/bin/node</string>');
   });
 
   it('points to dist/index.js', () => {
-    const plist = generatePlist('/usr/local/bin/node', '/home/user/nanoclaw', '/home/user');
-    expect(plist).toContain('/home/user/nanoclaw/dist/index.js');
+    const plist = generatePlist('/usr/local/bin/node', '/workspace/user/nanoclaw', '/workspace/user');
+    expect(plist).toContain('/workspace/user/nanoclaw/dist/index.js');
   });
 
   it('sets log paths', () => {
-    const plist = generatePlist('/usr/local/bin/node', '/home/user/nanoclaw', '/home/user');
+    const plist = generatePlist('/usr/local/bin/node', '/workspace/user/nanoclaw', '/workspace/user');
     expect(plist).toContain('nanoclaw.log');
     expect(plist).toContain('nanoclaw.error.log');
   });
@@ -97,28 +97,28 @@ describe('plist generation', () => {
 
 describe('systemd unit generation', () => {
   it('user unit uses default.target', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', false);
     expect(unit).toContain('WantedBy=default.target');
   });
 
   it('system unit uses multi-user.target', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', true);
+    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', true);
     expect(unit).toContain('WantedBy=multi-user.target');
   });
 
   it('contains restart policy', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', false);
     expect(unit).toContain('Restart=always');
     expect(unit).toContain('RestartSec=5');
   });
 
   it('uses KillMode=process to preserve detached children', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', false);
     expect(unit).toContain('KillMode=process');
   });
 
   it('sets correct ExecStart', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/srv/nanoclaw', '/home/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/srv/nanoclaw', '/workspace/user', false);
     expect(unit).toContain('ExecStart=/usr/bin/node /srv/nanoclaw/dist/index.js');
   });
 });
