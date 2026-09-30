@@ -120,7 +120,7 @@ export function hostProxyEnv(projectRoot: string, env: NodeJS.ProcessEnv = proce
   const httpProxy = proxy('HTTP_PROXY') ?? proxy('ALL_PROXY') ?? proxy('HTTPS_PROXY');
   if (!httpsProxy || !httpProxy) return {};
 
-  const bypass = [DEFAULT_NO_PROXY, pick('NO_PROXY')]
+  const bypass = [DEFAULT_NO_PROXY, env.NO_PROXY, env.no_proxy, fromFile.NO_PROXY]
     .flatMap((list) => (list ?? '').split(','))
     .map((entry) => entry.trim())
     .filter(Boolean);

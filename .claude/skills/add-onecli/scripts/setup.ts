@@ -134,7 +134,8 @@ export function withGatewayNoProxy(content: string, gatewayUrl: string): string 
     return content;
   }
   if (!host || !isLocalHost(host)) return content;
-  const current = content.match(/^NO_PROXY=(.*)$/m)?.[1] ?? '';
+  const rawCurrent = content.match(/^NO_PROXY=(.*)$/m)?.[1]?.trim() ?? '';
+  const current = /^(['"])(.*)\1$/.exec(rawCurrent)?.[2] ?? rawCurrent;
   const entries = current
     .split(',')
     .map((entry) => entry.trim())

@@ -172,6 +172,18 @@ describe('hostProxyEnv', () => {
     expect(hostProxyEnv(root, env).NO_PROXY).toBe('localhost,127.0.0.1,::1,[::1],.corp.example');
   });
 
+  it('merges uppercase and lowercase environment NO_PROXY with the .env list', () => {
+    fs.writeFileSync(path.join(root, '.env'), 'NO_PROXY=host.docker.internal,api.example\n');
+    const env = {
+      HTTPS_PROXY: 'http://proxy.example:3128',
+      NO_PROXY: '.corp.example',
+      no_proxy: '.lower.example',
+    };
+    expect(hostProxyEnv(root, env).NO_PROXY).toBe(
+      'localhost,127.0.0.1,::1,[::1],.corp.example,.lower.example,host.docker.internal,api.example',
+    );
+  });
+
   it('reads .env when the environment has no proxy, and the environment wins over .env', () => {
     fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://file.example:8080\nNO_PROXY=localhost,.internal\n');
     expect(hostProxyEnv(root, {})).toMatchObject({
