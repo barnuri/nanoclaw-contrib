@@ -83,6 +83,58 @@ level-two headings: `## D<n> — <title>`.
 7. **Push contribution branches only to the contribution remote.** PRs target `nanocoai/nanoclaw`
    `main` (or a registry branch, see Contribute step 1). Never push to `upstream`, never push a
    contribution branch to a private `origin`. Stage only files the task touched.
+8. **Keep the contribution fork's `main` synchronized with `upstream/main`.** At the start of
+   every skill invocation, run the default-branch sync below before the selected mode. This is
+   separate from contribution-branch pushes and never changes a PR branch.
+9. **Update existing PR branches before fixing them.** Before changing code for reviewer feedback
+   or another PR revision, merge the latest PR base branch into the head branch using the procedure
+   below. Never rebase or reset a published PR branch.
+
+## Contribution fork default-branch sync
+
+Before doing other work in any mode, fetch both branches and check whether the fork's `main` is
+behind:
+
+```bash
+git fetch upstream main
+git fetch <contrib-remote> main
+git merge-base --is-ancestor <contrib-remote>/main upstream/main
+```
+
+- If the refs are equal, continue without pushing.
+- If the command succeeds and the refs differ, fast-forward the fork with
+  `git push <contrib-remote> upstream/main:refs/heads/main`, fetch the remote `main` again, and
+  verify the refs are equal.
+- If the command fails, the fork's `main` is ahead of or has diverged from `upstream/main`. Stop
+  and report the commits. Never force-push, reset, or merge unexpected commits just to make the
+  refs equal.
+- If the push is rejected because the remote changed after fetch, fetch both refs and repeat the
+  ancestry check. Do not force-push.
+
+Contribution worktrees still branch from `upstream/main` (or the selected registry branch), not
+from the contribution fork's `main`.
+
+## Update a PR branch before revising it
+
+Before implementing reviewer feedback or any other change to an existing PR:
+
+1. Identify the PR's current base branch with
+   `gh pr view <number> --repo nanocoai/nanoclaw --json baseRefName` (normally `main`; channel and
+   provider PRs can target another branch).
+2. In that PR's worktree, confirm the branch is clean, then fetch and merge the latest base:
+
+   ```bash
+   git status --short
+   git fetch upstream <base-branch>
+   git merge --no-edit upstream/<base-branch>
+   ```
+
+3. If the merge conflicts, resolve them before making the requested PR fix. Never rebase, reset,
+   or force-push the published branch.
+4. After updating and fixing, rerun relevant tests, the full scrub check, and the required Gate 2
+   review before pushing.
+
+If the PR branch already contains the latest base, the merge is a no-op and work can continue.
 
 ## Mode: map
 
@@ -136,7 +188,8 @@ Precondition: ledger decision is `contribute`. If not, stop and run Gate 1 for i
    Base on `upstream/channels` or `upstream/providers` instead when the change targets a
    channel or provider adapter (those live on registry branches). When the feature depends on
    another open contribution, branch from that feature's `contrib/<dep>` branch so the PR includes
-   both; say "Depends on #<n>" in the PR body and rebase onto the base once the dependency merges.
+   both; say "Depends on #<n>" in the PR body and merge the latest base branch into the PR after
+   the dependency merges.
    Skip creation if the ledger already says `worktree-ready`. Set status `in-progress`.
 2. **Implement the generic base** per the route. For a seam: interface, default that reproduces
    current upstream behavior exactly, registration test. For a skill: follow
@@ -150,8 +203,8 @@ Precondition: ledger decision is `contribute`. If not, stop and run Gate 1 for i
 5. **Gate 2 — ask.** Show `git diff upstream/main --stat HEAD`, `git log upstream/main..HEAD
    --oneline`, the scrub result, and the PR title + body. `AskUserQuestion` options:
    `Push and open PR` | `Revise first` | `Abandon (keep local)`.
-   - Push: `git push -u <contrib-remote> contrib/<slug>`, `gh pr create --repo nanocoai/nanoclaw
-     ...`, ledger status `pr-open <url>`.
+   - Push: `git push -u <contrib-remote> contrib/<slug>`, `gh pr create --repo nanocoai/nanoclaw ...`,
+     ledger status `pr-open <url>`.
    - Revise: apply the requested changes, repeat steps 3–5.
    - Abandon: ledger decision `keep-local`, leave the worktree for the operator to remove
      (`git worktree remove` needs their request).

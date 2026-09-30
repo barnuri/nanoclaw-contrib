@@ -62,7 +62,7 @@ export function summarizePullRequest(slug: string, forkOwner: string, pr: PullRe
   }
   const state = pr.isDraft ? 'draft' : 'open';
   if (pr.mergeable === 'CONFLICTING') {
-    return { slug, state, detail, nextAction: 'rebase on the base branch and resolve conflicts, then Gate 2 again' };
+    return { slug, state, detail, nextAction: 'merge latest base branch and resolve conflicts, then Gate 2 again' };
   }
   const lastChangeRequest = pr.reviews
     .filter((review) => review.state === 'CHANGES_REQUESTED')
@@ -109,7 +109,7 @@ export function summarizeBranch(entry: LedgerEntry, branch: BranchSnapshot): Sta
       slug: entry.slug,
       state: 'conflicts',
       detail,
-      nextAction: 'rebase on the base branch and resolve conflicts',
+      nextAction: 'merge latest base branch and resolve conflicts',
     };
   }
   if (branch.commitsAhead === 0) {

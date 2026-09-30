@@ -59,7 +59,7 @@ describe('summarizePullRequest', () => {
 
   it('puts conflicts before review feedback', () => {
     const row = summarizePullRequest('x', OWNER, pr({ mergeable: 'CONFLICTING', reviewDecision: 'CHANGES_REQUESTED' }));
-    expect(row.nextAction).toContain('resolve conflicts');
+    expect(row.nextAction).toBe('merge latest base branch and resolve conflicts, then Gate 2 again');
   });
 
   it('waits for re-review once changes were pushed after the request', () => {
@@ -110,6 +110,9 @@ describe('summarizeBranch', () => {
     const base = { exists: true, commitsAhead: 0, commitsBehind: 0, conflictsWithBase: false };
     expect(summarizeBranch(entry, { ...base, exists: false }).state).toBe('no-branch');
     expect(summarizeBranch(entry, { ...base, conflictsWithBase: true }).state).toBe('conflicts');
+    expect(summarizeBranch(entry, { ...base, conflictsWithBase: true }).nextAction).toBe(
+      'merge latest base branch and resolve conflicts',
+    );
     expect(summarizeBranch(entry, base).state).toBe('not-started');
     expect(summarizeBranch(entry, { ...base, commitsAhead: 3 }).nextAction).toBe('verify, scrub, then Gate 2');
   });

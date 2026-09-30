@@ -5,13 +5,13 @@
 Upstream accepts source changes only for bug fixes, security fixes, simplifications, and
 reduced code. Features and capabilities must ship as skills. Every feature gets exactly one route:
 
-| Route | What goes upstream | PR kind | Local code afterwards |
-|-------|--------------------|---------|-----------------------|
-| `bugfix` | the fix, with a test | `kind/bug` | local patch deleted |
-| `seam` | interface + default reproducing current behavior + registration test | `kind/cleanup` | override registers into the seam; upstream-file edits drop to one line |
-| `skill` | a `/add-<name>` or utility skill: SKILL.md, code, tests, REMOVE.md | `kind/feature` + `delivery/skill` | local copy replaced by the skill install, local policy stays in the local folder |
-| `docs` | docs correction | `kind/documentation` | none |
-| `local-only` | nothing | — | stays local |
+| Route        | What goes upstream                                                   | PR kind                           | Local code afterwards                                                            |
+| ------------ | -------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------- |
+| `bugfix`     | the fix, with a test                                                 | `kind/bug`                        | local patch deleted                                                              |
+| `seam`       | interface + default reproducing current behavior + registration test | `kind/cleanup`                    | override registers into the seam; upstream-file edits drop to one line           |
+| `skill`      | a `/add-<name>` or utility skill: SKILL.md, code, tests, REMOVE.md   | `kind/feature` + `delivery/skill` | local copy replaced by the skill install, local policy stays in the local folder |
+| `docs`       | docs correction                                                      | `kind/documentation`              | none                                                                             |
+| `local-only` | nothing                                                              | —                                 | stays local                                                                      |
 
 A feature that needs both a seam and a skill is **two PRs**, seam first. One thing per PR.
 
@@ -50,7 +50,8 @@ pnpm install --frozen-lockfile
 **Dependency stacking.** When the feature builds on another contribution that has not merged yet,
 branch from that feature's branch instead: `git worktree add "../nanoclaw-contrib/$slug" -b
 "contrib/$slug" "contrib/<dep>"`. The PR then contains both changes; write "Depends on #<n>" in
-Related work, and rebase onto `upstream/main` once the dependency merges.
+Related work, and merge the latest base branch into the PR once the dependency merges. Do not
+rebase a published PR branch.
 
 Rules inside the worktree:
 
