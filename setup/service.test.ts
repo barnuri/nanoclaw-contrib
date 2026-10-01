@@ -7,8 +7,6 @@ import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { getLaunchdLabel } from '../src/install-slug.js';
 import { hostProxyEnv, nodeHonorsEnvProxy, renderSystemdUnit } from './service.js';
 
-const dockerHostAlias = ['host', 'docker', 'internal'].join('.');
-
 /**
  * Tests for service configuration generation.
  *
@@ -74,24 +72,24 @@ WantedBy=${isSystem ? 'multi-user.target' : 'default.target'}`;
 
 describe('plist generation', () => {
   it('contains the slug-scoped label', () => {
-    const projectRoot = '/workspace/user/nanoclaw';
-    const plist = generatePlist('/usr/local/bin/node', projectRoot, '/workspace/user');
+    const projectRoot = '/home/user/nanoclaw';
+    const plist = generatePlist('/usr/local/bin/node', projectRoot, '/home/user');
     expect(plist).toContain(`<string>${getLaunchdLabel(projectRoot)}</string>`);
     expect(plist).toMatch(/<string>com\.nanoclaw-v2-[0-9a-f]{8}<\/string>/);
   });
 
   it('uses the correct node path', () => {
-    const plist = generatePlist('/opt/node/bin/node', '/workspace/user/nanoclaw', '/workspace/user');
+    const plist = generatePlist('/opt/node/bin/node', '/home/user/nanoclaw', '/home/user');
     expect(plist).toContain('<string>/opt/node/bin/node</string>');
   });
 
   it('points to dist/index.js', () => {
-    const plist = generatePlist('/usr/local/bin/node', '/workspace/user/nanoclaw', '/workspace/user');
-    expect(plist).toContain('/workspace/user/nanoclaw/dist/index.js');
+    const plist = generatePlist('/usr/local/bin/node', '/home/user/nanoclaw', '/home/user');
+    expect(plist).toContain('/home/user/nanoclaw/dist/index.js');
   });
 
   it('sets log paths', () => {
-    const plist = generatePlist('/usr/local/bin/node', '/workspace/user/nanoclaw', '/workspace/user');
+    const plist = generatePlist('/usr/local/bin/node', '/home/user/nanoclaw', '/home/user');
     expect(plist).toContain('nanoclaw.log');
     expect(plist).toContain('nanoclaw.error.log');
   });
@@ -99,28 +97,28 @@ describe('plist generation', () => {
 
 describe('systemd unit generation', () => {
   it('user unit uses default.target', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', false);
     expect(unit).toContain('WantedBy=default.target');
   });
 
   it('system unit uses multi-user.target', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', true);
+    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', true);
     expect(unit).toContain('WantedBy=multi-user.target');
   });
 
   it('contains restart policy', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', false);
     expect(unit).toContain('Restart=always');
     expect(unit).toContain('RestartSec=5');
   });
 
   it('uses KillMode=process to preserve detached children', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/workspace/user/nanoclaw', '/workspace/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/home/user/nanoclaw', '/home/user', false);
     expect(unit).toContain('KillMode=process');
   });
 
   it('sets correct ExecStart', () => {
-    const unit = generateSystemdUnit('/usr/bin/node', '/srv/nanoclaw', '/workspace/user', false);
+    const unit = generateSystemdUnit('/usr/bin/node', '/srv/nanoclaw', '/home/user', false);
     expect(unit).toContain('ExecStart=/usr/bin/node /srv/nanoclaw/dist/index.js');
   });
 });
@@ -175,14 +173,14 @@ describe('hostProxyEnv', () => {
   });
 
   it('merges uppercase and lowercase environment NO_PROXY with the .env list', () => {
-    fs.writeFileSync(path.join(root, '.env'), `NO_PROXY=${dockerHostAlias},api.example\n`);
+    fs.writeFileSync(path.join(root, '.env'), `NO_PROXY=host.docker.internal,api.example\n`);
     const env = {
       HTTPS_PROXY: 'http://proxy.example:3128',
       NO_PROXY: '.example.net',
       no_proxy: '.lower.example',
     };
     expect(hostProxyEnv(root, env).NO_PROXY).toBe(
-      `localhost,127.0.0.1,::1,[::1],.example.net,.lower.example,${dockerHostAlias},api.example`,
+      `localhost,127.0.0.1,::1,[::1],.example.net,.lower.example,host.docker.internal,api.example`,
     );
   });
 
@@ -230,14 +228,18 @@ describe('renderSystemdUnit', () => {
 
   it('writes quoted proxy Environment= lines when a proxy is configured', () => {
     fs.writeFileSync(path.join(root, '.env'), 'HTTPS_PROXY=http://proxy.example:3128\nNO_PROXY=a, b\n');
-    const unit = renderSystemdUnit(root, '/usr/bin/node', '/workspace/user', false);
+    const unit = renderSystemdUnit(root, '/usr/bin/node', '/home/user', false);
     expect(unit).toContain('Environment="NODE_USE_ENV_PROXY=1"');
     expect(unit).toContain('Environment="HTTPS_PROXY=http://proxy.example:3128"');
     expect(unit).toContain('Environment="HTTP_PROXY=http://proxy.example:3128"');
     expect(unit).toContain('Environment="NO_PROXY=localhost,127.0.0.1,::1,[::1],a,b"');
+    expect(unit).toContain('Environment="https_proxy=http://proxy.example:3128"');
+    expect(unit).toContain('Environment="http_proxy=http://proxy.example:3128"');
+    expect(unit).toContain('Environment="no_proxy=localhost,127.0.0.1,::1,[::1],a,b"');
+    expect(unit).not.toContain('node_use_env_proxy');
   });
 
   it('writes no proxy lines without a proxy', () => {
-    expect(renderSystemdUnit(root, '/usr/bin/node', '/workspace/user', false)).not.toContain('PROXY');
+    expect(renderSystemdUnit(root, '/usr/bin/node', '/home/user', false)).not.toContain('PROXY');
   });
 });

@@ -167,6 +167,22 @@ function proxyStatus(projectRoot: string, nodePath: string): Record<string, stri
 // Set once per run so every service type reports it in SETUP_SERVICE.
 let proxyStatusFields: Record<string, string> = {};
 
+/**
+ * hostProxyEnv() as [name, value] pairs, with each proxy key also under its
+ * lowercase name: Node reads the lowercase name first, so an inherited
+ * no_proxy would otherwise override the merged NO_PROXY.
+ */
+function hostProxyEnvEntries(projectRoot: string): [string, string][] {
+  return Object.entries(hostProxyEnv(projectRoot)).flatMap(([key, value]): [string, string][] =>
+    key === 'NODE_USE_ENV_PROXY'
+      ? [[key, value]]
+      : [
+          [key, value],
+          [key.toLowerCase(), value],
+        ],
+  );
+}
+
 function xmlEscape(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -211,7 +227,7 @@ function setupLaunchd(projectRoot: string, nodePath: string, homeDir: string): v
   const plistPath = path.join(homeDir, 'Library', 'LaunchAgents', `${label}.plist`);
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
 
-  const proxyEntries = Object.entries(hostProxyEnv(projectRoot))
+  const proxyEntries = hostProxyEnvEntries(projectRoot)
     .map(([key, value]) => `\n        <key>${key}</key>\n        <string>${xmlEscape(value)}</string>`)
     .join('');
 
@@ -367,7 +383,7 @@ export function renderSystemdUnit(
   runningAsRoot: boolean,
 ): string {
   // systemd expands % specifiers and splits unquoted values on spaces.
-  const proxyLines = Object.entries(hostProxyEnv(projectRoot))
+  const proxyLines = hostProxyEnvEntries(projectRoot)
     .map(([key, value]) => `\nEnvironment="${key}=${value.replace(/%/g, '%%').replace(/["\\]/g, '\\$&')}"`)
     .join('');
 
@@ -604,12 +620,7 @@ socket.setTimeout(1000, () => {
 });
 `)} ${shellQuote(path.join(projectRoot, 'data', 'ncl.sock'))}`,
     '',
-    // The wrapper inherits the caller's shell, and Node prefers the lowercase names.
-    ...Object.entries(hostProxyEnv(projectRoot)).flatMap(([key, value]) =>
-      (key === 'NODE_USE_ENV_PROXY' ? [key] : [key, key.toLowerCase()]).map(
-        (name) => `export ${name}=${shellQuote(value)}`,
-      ),
-    ),
+    ...hostProxyEnvEntries(projectRoot).map(([name, value]) => `export ${name}=${shellQuote(value)}`),
     'echo "Starting NanoClaw..."',
     // Node resets the inherited SIGHUP ignore; detach from the wizard terminal.
     `setsid nohup ${shellQuote(nodePath)} ${shellQuote(entrypoint)} \\`,

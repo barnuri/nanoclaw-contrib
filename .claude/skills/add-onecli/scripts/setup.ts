@@ -112,12 +112,9 @@ export function isLocalHost(host: string): boolean {
       host,
     );
   }
-  const labels = host.split('.');
-  const isDockerHostAlias =
-    labels.length === 3 && labels[0] === 'host' && labels[1] === 'docker' && labels[2] === 'internal';
   return (
     host === 'localhost' ||
-    isDockerHostAlias ||
+    host === 'host.docker.internal' ||
     host === '::1' ||
     host.endsWith('.local') ||
     (!host.includes('.') && !host.includes(':'))
