@@ -6,7 +6,7 @@
  */
 import type { ChannelAdapter, ChannelDefaults, ChannelRegistration, ChannelSetup, OutboundFile } from './adapter.js';
 import type { ChannelDeliveryAdapter } from '../delivery.js';
-import { readEnvFile } from '../env.js';
+import { envValue } from '../env.js';
 import { log } from '../log.js';
 
 /** Adapter instance registry key shape: a webhook route segment and state-namespace key, so URL-safe only. */
@@ -23,21 +23,28 @@ function isNetworkError(err: unknown): err is Error {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** `<NAME>_ENABLED` for a registry name: uppercased, non-alphanumerics → `_`. */
-function channelEnabledKey(name: string): string {
-  return `${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_ENABLED`;
+/**
+ * Channels an operator has parked via `NANOCLAW_DISABLED_CHANNELS`
+ * (comma-separated registry names; trimmed, case-insensitive, empties
+ * ignored). Process env wins, then `.env`. Unset means none parked.
+ */
+function disabledChannels(): Set<string> {
+  const raw = process.env.NANOCLAW_DISABLED_CHANNELS || envValue('NANOCLAW_DISABLED_CHANNELS') || '';
+  return new Set(
+    raw
+      .split(',')
+      .map((n) => n.trim().toLowerCase())
+      .filter(Boolean),
+  );
 }
 
 /**
- * A channel is parked when `<NAME>_ENABLED` is exactly `false` (process env
- * wins, then `.env`). Unset or any other value means enabled. Parking only
- * skips the factory — the channel's DB rows stay untouched.
+ * A parked channel is not started; its DB rows (messaging groups, wirings,
+ * roles) stay untouched so removing it from the list re-enables it as-is.
  */
-function isChannelParked(name: string): boolean {
-  const key = channelEnabledKey(name);
-  const raw = process.env[key]?.trim() || readEnvFile([key])[key]?.trim();
-  if (raw !== 'false') return false;
-  log.info('Channel disabled via env flag, skipping', { channel: name, flag: key });
+function isChannelDisabled(name: string): boolean {
+  if (!disabledChannels().has(name.toLowerCase())) return false;
+  log.info('Channel disabled via NANOCLAW_DISABLED_CHANNELS, skipping', { channel: name });
   return true;
 }
 
@@ -281,14 +288,14 @@ export function getChannelContainerConfig(name: string): ChannelRegistration['co
 
 /**
  * Instantiate and set up all registered channel adapters.
- * Skips parked channels (`<NAME>_ENABLED=false`) and adapters that return
+ * Skips channels listed in `NANOCLAW_DISABLED_CHANNELS` and adapters that return
  * null (missing credentials).
  */
 export async function initChannelAdapters(setupFn: (adapter: ChannelAdapter) => ChannelSetup): Promise<void> {
   hotStartSetupFn = setupFn;
   for (const [name, registration] of registry) {
     try {
-      if (isChannelParked(name)) continue;
+      if (isChannelDisabled(name)) continue;
       const adapter = await registration.factory();
       if (!adapter) {
         log.warn('Channel credentials missing, skipping', { channel: name });
@@ -360,12 +367,14 @@ export async function teardownChannelAdapters(): Promise<void> {
  */
 let hotStartSetupFn: ((adapter: ChannelAdapter) => ChannelSetup) | null = null;
 
-export async function startChannelAdapter(key: string): Promise<'started' | 'already-active' | 'no-credentials'> {
+export async function startChannelAdapter(
+  key: string,
+): Promise<'started' | 'already-active' | 'no-credentials' | 'disabled'> {
   if (activeAdapters.has(key)) return 'already-active';
   const registration = registry.get(key);
   if (!registration) throw new Error(`startChannelAdapter: no registration for '${key}'`);
   if (!hotStartSetupFn) throw new Error('startChannelAdapter: initChannelAdapters has not run');
-  if (isChannelParked(key)) return 'no-credentials';
+  if (isChannelDisabled(key)) return 'disabled';
   const adapter = await registration.factory();
   if (!adapter) return 'no-credentials';
   const setup = hotStartSetupFn(adapter);
