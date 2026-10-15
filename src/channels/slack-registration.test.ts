@@ -39,6 +39,7 @@ import {
   buildCollapsibleCardBlocks,
   postSlackCollapsibleCard,
   resolveSlackConversation,
+  slackAuthorIsBot,
   type SlackCardPoster,
 } from './slack.js';
 import './index.js'; // the real barrel — triggers every channel's self-registration
@@ -46,6 +47,22 @@ import './index.js'; // the real barrel — triggers every channel's self-regist
 describe('slack channel registration', () => {
   it('registers slack via the channel barrel', () => {
     expect(getRegisteredChannelNames()).toContain('slack');
+  });
+});
+
+describe('slackAuthorIsBot', () => {
+  it('answers from the cached user, and null when the lookup finds no one', async () => {
+    const getUser = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ isBot: true })
+      .mockResolvedValueOnce({ isBot: false });
+    const adapter = { getUser } as unknown as SlackAdapter;
+
+    await expect(slackAuthorIsBot(adapter, 'U1')).resolves.toBeNull();
+    await expect(slackAuthorIsBot(adapter, 'U2')).resolves.toBe(true);
+    await expect(slackAuthorIsBot(adapter, 'U3')).resolves.toBe(false);
+    expect(getUser).toHaveBeenLastCalledWith('U3');
   });
 });
 
