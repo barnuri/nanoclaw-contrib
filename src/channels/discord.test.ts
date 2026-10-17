@@ -85,11 +85,13 @@ describe('isEnvProxyActive', () => {
   });
 
   it('is on with a proxy and NODE_USE_ENV_PROXY=1', () => {
-    expect(isEnvProxyActive({ HTTPS_PROXY: 'http://proxy.example:8080', NODE_USE_ENV_PROXY: '1' }, [])).toBe(true);
+    expect(isEnvProxyActive({ HTTPS_PROXY: 'http://proxy.example:8080', NODE_USE_ENV_PROXY: '1' }, [], '22.21.0')).toBe(
+      true,
+    );
   });
 
   it('is on with a lowercase proxy var and --use-env-proxy', () => {
-    expect(isEnvProxyActive({ http_proxy: 'http://proxy.example:8080' }, ['--use-env-proxy'])).toBe(true);
+    expect(isEnvProxyActive({ http_proxy: 'http://proxy.example:8080' }, ['--use-env-proxy'], '24.5.0')).toBe(true);
   });
 
   it('is on with --use-env-proxy in NODE_OPTIONS', () => {
@@ -97,8 +99,15 @@ describe('isEnvProxyActive', () => {
       isEnvProxyActive(
         { HTTP_PROXY: 'http://proxy.example:8080', NODE_OPTIONS: '--max-old-space-size=512 --use-env-proxy' },
         [],
+        '25.0.0',
       ),
     ).toBe(true);
+  });
+
+  it('is off when this Node version ignores the env proxy flag', () => {
+    const env = { HTTPS_PROXY: 'http://proxy.example:8080', NODE_USE_ENV_PROXY: '1' };
+    expect(isEnvProxyActive(env, [], '23.11.1')).toBe(false);
+    expect(isEnvProxyActive(env, [], '22.20.0')).toBe(false);
   });
 });
 
@@ -133,5 +142,12 @@ describe('resolveGatewayModules', () => {
     expect(typeof ws.WebSocket).toBe('function');
     expect((ws.WebSocket as { OPEN?: number }).OPEN).toBe(1);
     expect(typeof loadGateway).toBe('function');
+  });
+
+  it('reports whether @discordjs/ws is already loaded', () => {
+    const { loadGateway, alreadyLoaded } = resolveGatewayModules();
+    expect(alreadyLoaded).toBe(false);
+    loadGateway();
+    expect(resolveGatewayModules().alreadyLoaded).toBe(true);
   });
 });

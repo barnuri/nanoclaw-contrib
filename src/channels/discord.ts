@@ -7,6 +7,8 @@ import { createRequire } from 'node:module';
 import type { DiscordAdapter } from '@chat-adapter/discord';
 
 import { readEnvFile } from '../env.js';
+import { nodeHonorsEnvProxy } from '../env-proxy.js';
+import { log } from '../log.js';
 import type { ChannelDefaults } from './adapter.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { registerChannelAdapter } from './channel-registry.js';
@@ -76,11 +78,16 @@ function unwrapForwards(adapter: DiscordAdapter): void {
 
 /**
  * True when Node routes its own HTTP clients through HTTP(S)_PROXY
- * (`NODE_USE_ENV_PROXY=1` or `--use-env-proxy`) and a proxy is configured.
+ * (`NODE_USE_ENV_PROXY=1` or `--use-env-proxy`), a proxy is configured, and
+ * this Node version honors the flag (same check `setup/service.ts` uses).
  */
-export function isEnvProxyActive(env: NodeJS.ProcessEnv = process.env, execArgv: string[] = process.execArgv): boolean {
+export function isEnvProxyActive(
+  env: NodeJS.ProcessEnv = process.env,
+  execArgv: string[] = process.execArgv,
+  nodeVersion: string = process.versions.node,
+): boolean {
   const proxy = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy;
-  if (!proxy) return false;
+  if (!proxy || !nodeHonorsEnvProxy(nodeVersion)) return false;
   return (
     env.NODE_USE_ENV_PROXY === '1' ||
     execArgv.includes('--use-env-proxy') ||
@@ -108,13 +115,16 @@ export function withNativeWebSocket(ws: WsModule, native: unknown, load: () => v
   }
 }
 
-/** Resolve the `ws` copy @discordjs/ws uses, and a loader for @discordjs/ws itself. */
-export function resolveGatewayModules(): { ws: WsModule; loadGateway: () => void } {
+/**
+ * Resolve the `ws` copy @discordjs/ws uses, a loader for @discordjs/ws itself,
+ * and whether it was already loaded (the swap only works on the first load).
+ */
+export function resolveGatewayModules(): { ws: WsModule; loadGateway: () => void; alreadyLoaded: boolean } {
   const fromAdapter = createRequire(import.meta.resolve('@chat-adapter/discord'));
   const fromDiscordJs = createRequire(fromAdapter.resolve('discord.js'));
   const gatewayPath = fromDiscordJs.resolve('@discordjs/ws');
   const ws = createRequire(gatewayPath)('ws') as WsModule;
-  return { ws, loadGateway: () => fromDiscordJs(gatewayPath) };
+  return { ws, loadGateway: () => fromDiscordJs(gatewayPath), alreadyLoaded: gatewayPath in fromDiscordJs.cache };
 }
 
 /**
@@ -125,8 +135,19 @@ export function resolveGatewayModules(): { ws: WsModule; loadGateway: () => void
  */
 function routeGatewayThroughEnvProxy(): void {
   if (!isEnvProxyActive() || typeof globalThis.WebSocket !== 'function') return;
-  const { ws, loadGateway } = resolveGatewayModules();
-  withNativeWebSocket(ws, globalThis.WebSocket, loadGateway);
+  try {
+    const { ws, loadGateway, alreadyLoaded } = resolveGatewayModules();
+    if (alreadyLoaded) {
+      // @discordjs/ws read ws.WebSocket when it first loaded; swapping now does nothing.
+      log.warn('Discord Gateway proxy swap skipped: @discordjs/ws was already loaded, Gateway will connect directly');
+      return;
+    }
+    withNativeWebSocket(ws, globalThis.WebSocket, loadGateway);
+    log.info('Discord Gateway routed through the env proxy (native WebSocket)');
+  } catch (err) {
+    // Resolution can break if discord.js internals move; start Discord without the proxy swap.
+    log.warn('Discord Gateway proxy swap failed, Gateway will connect directly', { err });
+  }
 }
 
 async function createDiscordBridge(env: Record<string, string | undefined>, botToken: string) {
