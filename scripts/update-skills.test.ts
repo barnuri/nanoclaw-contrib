@@ -50,6 +50,18 @@ describe('installed skill detection', () => {
       { name: 'slack', skillName: 'add-slack', kind: 'channel' },
     ]);
   });
+
+  it('excludes support modules that another skill appends to the channel barrel', () => {
+    // `add-slack` appends the bot-inbound guard to the barrel itself; there is
+    // no `add-slack-a2a-guard` skill, so selecting it would fail the refresh
+    // with a missing SKILL.md.
+    const root = temp('nanoclaw-skills-detect-support-');
+    write(root, 'src/channels/index.ts', "import './cli.js';\nimport './slack.js';\nimport './slack-a2a-guard.js';\n");
+    write(root, 'src/providers/index.ts', '');
+    write(root, 'container/agent-runner/src/providers/index.ts', "import './claude.js';\n");
+
+    expect(detectInstalledSkills(root)).toEqual([{ name: 'slack', skillName: 'add-slack', kind: 'channel' }]);
+  });
 });
 
 describe('registry refresh end to end', () => {

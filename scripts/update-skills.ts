@@ -86,9 +86,17 @@ function readImports(file: string): string[] {
   return names;
 }
 
+/**
+ * Barrel imports that are NOT channels of their own: `cli` is the built-in
+ * local-terminal channel, and `slack-a2a-guard` is a support module that
+ * `add-slack` itself appends to the barrel (there is no `add-slack-a2a-guard`
+ * skill, so selecting it fails the refresh with a missing SKILL.md).
+ */
+const NON_CHANNEL_BARREL_IMPORTS = new Set(['cli', 'slack-a2a-guard']);
+
 export function detectInstalledSkills(root: string): InstalledSkill[] {
   const channels = readImports(path.join(root, 'src/channels/index.ts'))
-    .filter((name) => name !== 'cli')
+    .filter((name) => !NON_CHANNEL_BARREL_IMPORTS.has(name))
     .map((name) => ({ name, skillName: `add-${name}`, kind: 'channel' as const }));
   const providers = new Set([
     ...readImports(path.join(root, 'src/providers/index.ts')),
