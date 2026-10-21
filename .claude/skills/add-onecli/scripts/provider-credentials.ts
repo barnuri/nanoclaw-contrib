@@ -14,6 +14,8 @@ export interface OneCliCredential {
   name: string;
   type: 'openai' | 'generic';
   hostPattern: string;
+  /** Exact path the entry is limited to; absent means the whole host. */
+  pathPattern?: string;
   injectionConfig?: KeyInjection;
   authMode?: 'oauth';
 }
@@ -65,7 +67,7 @@ export function findOneCliCredential(payload: unknown, descriptor: OneCliCredent
   const secret = namedSecret(payload, descriptor.name);
   if (!secret) return null;
   const injection = descriptor.injectionConfig;
-  // Older OpenCode setup used bearer injection for every generic key. Only
+  // An older provider setup used bearer injection for every generic key. Only
   // that known mistake may be repaired; arbitrary rules belong to the operator.
   const knownKeyMapping =
     !injection || sameInjection(secret.injectionConfig, injection) || sameInjection(secret.injectionConfig, BEARER);
@@ -78,7 +80,7 @@ export function findOneCliCredential(payload: unknown, descriptor: OneCliCredent
     secret.valueSource !== undefined && secret.valueSource !== 'inline' ? 'valueSource' : undefined,
     secret.opRef !== undefined && secret.opRef !== null ? 'opRef' : undefined,
     secret.scope !== 'project' ? 'scope' : undefined,
-    secret.pathPattern ? 'pathPattern' : undefined,
+    (secret.pathPattern || undefined) !== descriptor.pathPattern ? 'pathPattern' : undefined,
     !knownKeyMapping ? 'injectionConfig' : undefined,
     descriptor.authMode && (!isRecord(secret.metadata) || secret.metadata.authMode !== descriptor.authMode)
       ? 'metadata.authMode'
@@ -104,7 +106,7 @@ export function createOneCliCredentialConnection(
   const saved = readEnvFile(['ONECLI_URL', 'ONECLI_API_KEY', 'ONECLI_PROJECT_ID'], root);
   url ??= process.env.ONECLI_URL || saved.ONECLI_URL;
   apiKey ??= process.env.ONECLI_API_KEY || saved.ONECLI_API_KEY;
-  if (!url) throw new Error('Configure ONECLI_URL before connecting an OpenCode credential.');
+  if (!url) throw new Error(`Configure ONECLI_URL before connecting the ${descriptor.name} credential.`);
   const base = new URL(url);
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) {
     throw new Error('ONECLI_URL must be an HTTP(S) gateway URL without embedded credentials, query, or fragment.');
@@ -129,7 +131,7 @@ export function createOneCliCredentialConnection(
       // API responses can include previews of secrets. Never echo them or a
       // transport error, including when a successful write's response is lost.
       throw new Error(
-        'Could not confirm the OpenCode credential in OneCLI. Check gateway connectivity and management permissions, then retry.',
+        `Could not confirm the ${descriptor.name} credential in OneCLI. Check gateway connectivity and management permissions, then retry.`,
       );
     }
   };
@@ -153,7 +155,9 @@ export function createOneCliCredentialConnection(
       const previous = { ...descriptor, hostPattern: secret.hostPattern };
       findOneCliCredential(metadata, previous);
       if (!(await options.confirmHostChange(previous.hostPattern, descriptor.hostPattern))) {
-        throw new Error('OpenCode credential host change cancelled. Existing credential and defaults are unchanged.');
+        throw new Error(
+          `The ${descriptor.name} credential host change cancelled. Existing credential and defaults are unchanged.`,
+        );
       }
       expected = previous;
     }
@@ -166,7 +170,7 @@ export function createOneCliCredentialConnection(
     async keep(existingId) {
       const metadata = await request('', 'GET');
       if (findOneCliCredential(metadata, expected) !== existingId) {
-        throw new Error('The OpenCode vault entry changed during setup. Check OneCLI and retry.');
+        throw new Error(`The ${descriptor.name} vault entry changed during setup. Check OneCLI and retry.`);
       }
       const secret = (metadata as Array<Record<string, unknown>>).find((row) => row.id === existingId)!;
       const changes = {
@@ -181,9 +185,9 @@ export function createOneCliCredentialConnection(
       }
     },
     async save(value, existingId) {
-      if (!value.trim()) throw new Error('Cannot save an empty OpenCode credential.');
+      if (!value.trim()) throw new Error(`Cannot save an empty ${descriptor.name} credential.`);
       if ((await find()) !== existingId) {
-        throw new Error('The OpenCode vault entry changed during setup. Check OneCLI and retry.');
+        throw new Error(`The ${descriptor.name} vault entry changed during setup. Check OneCLI and retry.`);
       }
       if (existingId) {
         await request(`/${encodeURIComponent(existingId)}`, 'PATCH', {
@@ -199,6 +203,7 @@ export function createOneCliCredentialConnection(
         type: descriptor.type,
         valueSource: 'inline',
         hostPattern: descriptor.hostPattern,
+        ...(descriptor.pathPattern ? { pathPattern: descriptor.pathPattern } : {}),
         value,
         ...(descriptor.injectionConfig ? { injectionConfig: descriptor.injectionConfig } : {}),
       });
@@ -232,6 +237,7 @@ export function createProviderCredentialConnection(
       // refreshes the token and injects the account header itself.
       type: target.kind === 'oauth' ? 'openai' : 'generic',
       hostPattern: target.host,
+      ...(target.path ? { pathPattern: target.path } : {}),
       ...(target.kind === 'api-key' ? { injectionConfig: target.injection } : { authMode: 'oauth' as const }),
     },
     undefined,
@@ -243,7 +249,7 @@ export function createProviderCredentialConnection(
   void target.proxyValue;
   let observed: string | null | undefined;
   const require = (): string | null => {
-    if (observed === undefined) throw new Error('Look up the OpenCode credential before keeping or saving it.');
+    if (observed === undefined) throw new Error(`Look up the ${target.name} credential before keeping or saving it.`);
     return observed;
   };
   return {
@@ -254,7 +260,7 @@ export function createProviderCredentialConnection(
     },
     async keep() {
       const id = require();
-      if (id === null) throw new Error('No stored OpenCode credential to keep; enter a value.');
+      if (id === null) throw new Error(`No stored ${target.name} credential to keep; enter a value.`);
       await vault.keep(id);
     },
     async save(value) {
@@ -264,7 +270,7 @@ export function createProviderCredentialConnection(
   };
 }
 
-/** OneCLI's `openai` record is the Codex login-file shape; OpenCode's parsed login is re-encoded into it. */
+/** OneCLI's `openai` record has its own login-file shape; a parsed chatgpt OAuth login is re-encoded into it. */
 export function encodeOneCliValue(target: GatewayCredentialTarget, value: string | GatewayOAuthCredential): string {
   if (target.kind === 'api-key') {
     if (typeof value !== 'string') throw new Error('An API-key connection stores a string value.');
@@ -274,7 +280,7 @@ export function encodeOneCliValue(target: GatewayCredentialTarget, value: string
     throw new Error(`This connection stores the ${target.oauth.profile} OAuth profile.`);
   }
   // NanoClaw's pinned OneCLI cannot refresh this record on its own; see
-  // .claude/skills/add-opencode/ONECLI-LEGACY.md for the manual procedure.
+  // .claude/skills/add-onecli/references/chatgpt-oauth-refresh.md for the manual procedure.
   return JSON.stringify({
     tokens: {
       access_token: value.accessToken,
