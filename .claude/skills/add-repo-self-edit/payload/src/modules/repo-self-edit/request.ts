@@ -5,20 +5,19 @@
  * first dispatch AND again on the approved replay, so the patch is
  * re-checked against the tree as it is at apply time, not as it was when
  * the card went out. requestRepoSelfEditHold renders the card: the whole
- * patch, fenced and escaped, because the admin must see every line that
- * will land. A patch too large for one card is refused with a request to
- * split it rather than shown truncated.
+ * patch, fenced and escaped (`fenceForCard`, never with a length cap),
+ * because the admin must see every line that will land. A patch too long
+ * for one card is refused, never truncated: requestApproval checks every
+ * card against the channel-neutral limit and tells the agent to shorten it.
  */
 import { getAgentGroup } from '../../db/agent-groups.js';
 import type { Session } from '../../types.js';
 import { notifyAgent, requestApproval } from '../approvals/index.js';
-import { escapeInvisibles } from '../self-mod/request.js';
+import { escapeInvisibles, fenceForCard } from '../../card-text.js';
 import { checkPatch, dirtyFiles, ignoredFiles } from './git.js';
 import { parsePatchFiles, pathRefusal } from './policy.js';
 import { isLocked, repoRoot } from './state.js';
 
-/** Byte cap on the rendered card — a chat message limit leaves room for about this much. */
-export const CARD_MAX_BYTES = 3500;
 const MAX_REASON_CHARS = 300;
 
 async function refuse(session: Session, why: string): Promise<false> {
@@ -59,13 +58,8 @@ export function renderCard(agentName: string, reason: string, diff: string): str
   return (
     `Agent "${agentName}" wants to change NanoClaw's own source:\n` +
     `Reason: ${escapeInvisibles(JSON.stringify(reason))}\n` +
-    '```\n' +
-    diff
-      .replace(/\n$/, '')
-      .split('\n')
-      .map((line) => escapeInvisibles(line))
-      .join('\n') +
-    '\n```'
+    // No maxLength: the whole patch or no card at all (requestApproval refuses an over-long one).
+    fenceForCard(diff.replace(/\n$/, ''))
   );
 }
 
@@ -76,13 +70,6 @@ export async function requestRepoSelfEditHold(content: Record<string, unknown>, 
   const reason = content.reason as string;
 
   const question = renderCard(agentGroup.name, reason, diff);
-  if (Buffer.byteLength(question, 'utf8') > CARD_MAX_BYTES) {
-    await refuse(
-      session,
-      `the approval card would exceed ${CARD_MAX_BYTES} bytes — split the change into smaller proposals so each one can be read in full.`,
-    );
-    return;
-  }
   await requestApproval({
     session,
     agentName: agentGroup.name,

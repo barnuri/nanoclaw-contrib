@@ -349,7 +349,8 @@ describe('refused before any card is minted', () => {
   it('a patch too large to show in full on one card', async () => {
     await propose(patchFor('docs/guide.md', `# Guide\n${'line of text\n'.repeat(400)}`));
     expect(delivered).toHaveLength(0);
-    expect(notes().at(-1)).toContain('split the change');
+    // requestApproval refuses a card it cannot show in full; nothing is truncated.
+    expect(notes().at(-1)).toContain('too long to show in full');
   });
 
   it('a group that is not opted in', async () => {
