@@ -1,6 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { lastCopilotLogin, parseCopilotAccount } from './copilot-login.js';
+import {
+  COPILOT_API_SECRET,
+  COPILOT_CREDENTIAL_PLACEHOLDER,
+  copilotApiTarget,
+  lastCopilotLogin,
+  parseCopilotAccount,
+} from './copilot-login.js';
 
 describe('parseCopilotAccount', () => {
   it.each([
@@ -31,5 +40,25 @@ describe('lastCopilotLogin', () => {
 
   it('ignores logins on other hosts', () => {
     expect(lastCopilotLogin('{"lastLoggedInUser": {"host": "https://ghe.example", "login": "octo"}}')).toBeUndefined();
+  });
+});
+
+describe('copilotApiTarget', () => {
+  it('scopes the token host-wide to the licensed API host with a bearer header', () => {
+    expect(copilotApiTarget('https://api.business.githubcopilot.com')).toEqual({
+      name: COPILOT_API_SECRET,
+      kind: 'api-key',
+      host: 'api.business.githubcopilot.com',
+      proxyValue: COPILOT_CREDENTIAL_PLACEHOLDER,
+      injection: { headerName: 'Authorization', valueFormat: 'Bearer {value}' },
+    });
+  });
+
+  it('uses the placeholder the container provider sends', () => {
+    // scripts/ and container/ are siblings both in the payload and once installed.
+    const source = path.join(import.meta.dirname, '..', 'container', 'agent-runner', 'src', 'providers', 'copilot.ts');
+    expect(fs.readFileSync(source, 'utf8')).toContain(
+      `COPILOT_GATEWAY_PLACEHOLDER = '${COPILOT_CREDENTIAL_PLACEHOLDER}'`,
+    );
   });
 });

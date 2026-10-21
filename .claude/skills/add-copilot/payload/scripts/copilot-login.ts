@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { getCredentialStore, type GatewayCredentialTarget } from '../setup/gateways/credential-store.js';
 import { upsertEnvVar } from '../setup/set-env.js';
 import { readEnvFile } from '../src/env.js';
 
@@ -13,6 +14,8 @@ const GITHUB_HOST = 'https://github.com';
 export const COPILOT_INTERNAL_SECRET = 'Copilot GitHub (copilot_internal)';
 export const COPILOT_API_SECRET = 'Copilot API';
 export const COPILOT_BLOCK_RULE = 'Block Copilot individual endpoint';
+/** Must equal `COPILOT_GATEWAY_PLACEHOLDER` in the container provider (a test keeps them in sync). */
+export const COPILOT_CREDENTIAL_PLACEHOLDER = 'nanoclaw-gateway-placeholder';
 const USAGE = 'Usage: pnpm exec tsx scripts/copilot-login.ts [--login <github-login>] [--relogin]';
 
 export interface CopilotAccount {
@@ -62,6 +65,26 @@ function deviceLogin(): void {
   if (result.status !== 0) {
     throw new Error('copilot login failed');
   }
+}
+
+/** The licensed Copilot API host takes the token host-wide, which the gateway-neutral seam expresses. */
+export function copilotApiTarget(apiUrl: string): GatewayCredentialTarget {
+  return {
+    name: COPILOT_API_SECRET,
+    kind: 'api-key',
+    host: new URL(apiUrl).hostname,
+    proxyValue: COPILOT_CREDENTIAL_PLACEHOLDER,
+    injection: { headerName: 'Authorization', valueFormat: 'Bearer {value}' },
+  };
+}
+
+async function saveCopilotApiToken(apiUrl: string, token: string): Promise<void> {
+  const store = await getCredentialStore();
+  if (!store.connection) throw new Error('The selected gateway does not support provider credential connections.');
+  const connection = store.connection(copilotApiTarget(apiUrl));
+  // A plan change moves the licensed host (individual ↔ business/enterprise); follow it.
+  await connection.find({ confirmHostChange: async () => true });
+  await connection.save(token);
 }
 
 function onecli<T>(args: string[]): T {
@@ -130,7 +153,11 @@ export async function runCopilotLogin(args = process.argv.slice(2)): Promise<voi
   const tokenFile = path.join(dir, 'token');
   try {
     fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-    // The token also carries repo scopes, so api.github.com injection stays path-scoped.
+    // Gateway-specific on purpose: the Copilot CLI calls several undocumented paths
+    // under /copilot_internal/ (token exchange, user, entitlement checks; the set moves
+    // between CLI versions), and the neutral seam scopes a credential to one exact path.
+    // The token also carries repo scopes, so api.github.com injection must stay
+    // path-scoped rather than host-wide.
     replaceSecret(COPILOT_INTERNAL_SECRET, tokenFile, [
       '--host-pattern',
       'api.github.com',
@@ -141,18 +168,12 @@ export async function runCopilotLogin(args = process.argv.slice(2)): Promise<voi
       '--value-format',
       'token {value}',
     ]);
-    replaceSecret(COPILOT_API_SECRET, tokenFile, [
-      '--host-pattern',
-      new URL(account.apiUrl).hostname,
-      '--header-name',
-      'Authorization',
-      '--value-format',
-      'Bearer {value}',
-    ]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  await saveCopilotApiToken(account.apiUrl, token);
 
+  // A block rule has no gateway-neutral form yet; OneCLI-specific like the path-scoped secret above.
   const individual = new URL(account.apiUrl).hostname === INDIVIDUAL_COPILOT_API_HOST;
   const blockRules = listNamed('rules').filter((rule) => rule.name === COPILOT_BLOCK_RULE);
   if (individual) {

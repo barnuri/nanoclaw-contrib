@@ -26,12 +26,16 @@ network boundary: `Authorization: token {value}` for `api.github.com` path
 `/copilot_internal/*`, and `Authorization: Bearer {value}` for the licensed
 Copilot API host returned by GitHub.
 
-The login helper is intentionally narrow. It supports OneCLI only and reads the
-Copilot device-login token from the macOS keychain only; other gateways and
-operating systems fail clearly. NanoClaw's gateway-neutral credential store
-cannot yet express path-scoped grants for `api.github.com`, so this helper shells
-to `onecli` for the two scoped secrets and the optional block rule. When that
-store grows path scoping, this helper can move behind the neutral seam.
+The login helper is intentionally narrow. It reads the Copilot device-login
+token from the macOS keychain only, and it supports OneCLI only; other gateways
+and operating systems fail clearly. The licensed Copilot API credential goes
+through NanoClaw's gateway-neutral credential store (`getCredentialStore().connection`,
+host-wide with a bearer header). Two pieces stay OneCLI-specific because the
+neutral seam cannot express them: the `api.github.com` secret, which must cover
+every path under `/copilot_internal/` (the Copilot CLI calls several undocumented
+paths there, and the set changes between CLI versions) while the seam limits a
+credential to one exact path; and the block rule for the individual endpoint,
+which has no neutral form yet.
 
 ## Install
 
