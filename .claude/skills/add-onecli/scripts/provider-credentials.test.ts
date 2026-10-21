@@ -10,13 +10,13 @@ import {
 } from './provider-credentials.js';
 
 const CHATGPT_SECRET: OneCliCredential = {
-  name: 'OpenCode ChatGPT',
+  name: 'Provider ChatGPT',
   type: 'openai',
   hostPattern: 'chatgpt.com',
   authMode: 'oauth',
 };
 const google: OneCliCredential = {
-  name: 'OpenCode google',
+  name: 'Provider google',
   type: 'generic',
   hostPattern: 'generativelanguage.googleapis.com',
   injectionConfig: { headerName: 'x-goog-api-key', valueFormat: '{value}' },
@@ -35,7 +35,7 @@ const metadata = (spec: OneCliCredential = google) => ({
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe('OpenCode vault management', () => {
+describe('OneCLI vault management', () => {
   it('reuses an inline credential when a legacy response omits its source', async () => {
     const transport = vi.fn(
       async (_url: string, init: RequestInit) =>
@@ -253,9 +253,9 @@ describe('OpenCode vault management', () => {
   });
 });
 
-describe('OpenCode credential host migration', () => {
+describe('OneCLI credential host migration', () => {
   const target: OneCliCredential = {
-    name: 'OpenCode openai',
+    name: 'Provider openai',
     type: 'generic',
     hostPattern: 'new.example',
     injectionConfig: { headerName: 'Authorization', valueFormat: 'Bearer {value}' },
@@ -388,7 +388,7 @@ describe('gateway seam adapter', () => {
     );
     const connection = createProviderCredentialConnection(key());
     expect(await connection.find()).toBeNull();
-    await expect(connection.keep()).rejects.toThrow('No stored OpenCode credential');
+    await expect(connection.keep()).rejects.toThrow(`No stored ${google.name} credential`);
     await connection.save('google-fixture');
     expect(writes).toEqual([expect.objectContaining({ name: google.name, type: 'generic', value: 'google-fixture' })]);
   });
@@ -397,6 +397,34 @@ describe('gateway seam adapter', () => {
     gateway(() => [metadata()]);
     await expect(createProviderCredentialConnection(key()).save('x')).rejects.toThrow('Look up');
     await expect(createProviderCredentialConnection(key()).keep()).rejects.toThrow('Look up');
+  });
+
+  it('limits an entry to the target path and reuses only an entry with the same path', async () => {
+    const writes: unknown[] = [];
+    let rows: unknown[] = [];
+    gateway(
+      () => rows,
+      (init) => writes.push(JSON.parse(init.body as string)),
+    );
+    const scoped = { ...key(), path: '/v1/exchange' };
+    const created = createProviderCredentialConnection(scoped);
+    expect(await created.find()).toBeNull();
+    await created.save('scoped-fixture');
+    expect(writes).toEqual([expect.objectContaining({ hostPattern: key().host, pathPattern: '/v1/exchange' })]);
+
+    rows = [{ ...metadata(), pathPattern: '/v1/exchange' }];
+    expect(await createProviderCredentialConnection(scoped).find()).toEqual({ reusable: true });
+    await expect(createProviderCredentialConnection(key()).find()).rejects.toThrow(
+      'unexpected metadata in: pathPattern',
+    );
+    rows = [{ ...metadata(), pathPattern: '/v1/other' }];
+    await expect(createProviderCredentialConnection(scoped).find()).rejects.toThrow(
+      'unexpected metadata in: pathPattern',
+    );
+    rows = [metadata()];
+    await expect(createProviderCredentialConnection(scoped).find()).rejects.toThrow(
+      'unexpected metadata in: pathPattern',
+    );
   });
 
   it('translates the ChatGPT profile into the native openai record and nothing else', async () => {
