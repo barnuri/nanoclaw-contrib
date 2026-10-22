@@ -89,6 +89,11 @@ level-two headings: `## D<n> — <title>`.
 9. **Update existing PR branches before fixing them.** Before changing code for reviewer feedback
    or another PR revision, merge the latest PR base branch into the head branch using the procedure
    below. Never rebase or reset a published PR branch.
+10. **Refresh the status report at the end of every invocation, in every mode.** As the last
+   step, after any ledger change, push or PR, run `pr-status.ts` so the status report reflects
+   this run. Anything that reads the report (a dashboard, a scheduled summary) then shows the new
+   state without its own refresh. If the script fails (GitHub unreachable), say so in the final
+   reply; do not skip it silently.
 
 ## Contribution fork default-branch sync
 
