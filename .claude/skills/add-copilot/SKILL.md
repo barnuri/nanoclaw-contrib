@@ -23,19 +23,16 @@ device-login token never enters the container. The container constructs
 and `GH_TOKEN`, `GITHUB_TOKEN`, and `COPILOT_GITHUB_TOKEN` stripped from the SDK
 environment. The selected credential gateway injects the real token only at the
 network boundary: `Authorization: token {value}` for `api.github.com` path
-`/copilot_internal/*`, and `Authorization: Bearer {value}` for the licensed
+`/copilot_internal/user`, and `Authorization: Bearer {value}` for the licensed
 Copilot API host returned by GitHub.
 
-The login helper is intentionally narrow. It reads the Copilot device-login
-token from the macOS keychain only, and it supports OneCLI only; other gateways
-and operating systems fail clearly. The licensed Copilot API credential goes
-through NanoClaw's gateway-neutral credential store (`getCredentialStore().connection`,
-host-wide with a bearer header). Two pieces stay OneCLI-specific because the
-neutral seam cannot express them: the `api.github.com` secret, which must cover
-every path under `/copilot_internal/` (the Copilot CLI calls several undocumented
-paths there, and the set changes between CLI versions) while the seam limits a
-credential to one exact path; and the block rule for the individual endpoint,
-which has no neutral form yet.
+The login helper reads the Copilot device-login token from the macOS keychain
+only; other operating systems fail clearly. Both credentials go through
+NanoClaw's gateway-neutral credential store (`getCredentialStore().connection`)
+with `provider: 'copilot'`, so a gateway that grants credentials per agent gives
+them to groups running this provider. The selected gateway must support
+path-scoped connections (`connectionPaths`); the `api.github.com` token also
+carries the account's repo scopes, so it is limited to that one path.
 
 ## Install
 
@@ -134,16 +131,14 @@ pnpm exec tsx scripts/copilot-login.ts
 
 The helper runs `copilot login` when no stored device-login token is available,
 reads the token from the macOS keychain, asks GitHub which Copilot API endpoint
-the account is licensed for, then configures OneCLI. It writes `COPILOT_API_URL`
-to `.env`. For non-individual accounts it creates a OneCLI block rule for
-`api.individual.githubcopilot.com`; for individual accounts it removes that
-rule. Re-run with `--relogin` after refreshing the device login, or
+the account is licensed for, then saves both credentials through the selected
+gateway. It writes `COPILOT_API_URL` to `.env`. Re-run with `--relogin` after refreshing the device login, or
 `--login <github-login>` when the Copilot CLI config does not identify the
 right account.
 
 `api.github.com` is deliberately absent from the provider's `modelDomains`:
 model domains are auto-approved host-wide, while this token must be scoped only
-to `/copilot_internal/*` on that host.
+to `/copilot_internal/user` on that host.
 
 ## Use it
 
@@ -166,11 +161,13 @@ To remove the provider, follow [REMOVE.md](REMOVE.md).
 
 ## Troubleshooting
 
-- **`Copilot gateway login supports OneCLI only`**: select the OneCLI gateway
-  before running this provider's auth helper.
+- **`The selected gateway cannot limit a credential to one path`**: select a
+  gateway whose credential store supports path-scoped connections (OneCLI does).
 - **`Reading the Copilot device-login token is only supported from the macOS keychain`**:
-  run the helper on macOS, or wait for a gateway-neutral path-scoped credential
-  store.
+  run the helper on macOS.
+- **401 from `api.github.com` inside the container**: the Copilot CLI called a
+  path other than `/copilot_internal/user`. Add that exact path as another
+  connection in `scripts/copilot-login.ts`, then re-run the helper.
 - **Authentication fails inside the container**: re-run
   `pnpm exec tsx scripts/copilot-login.ts --relogin` on the host, then restart
   the affected group.

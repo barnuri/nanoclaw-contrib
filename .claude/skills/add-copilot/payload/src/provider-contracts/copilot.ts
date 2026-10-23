@@ -9,7 +9,7 @@ registerProviderHostContract('copilot', {
     directory: '.copilot-shared',
   })),
   // api.github.com is excluded: model domains are auto-approved host-wide, and the
-  // device-login token is only scoped to /copilot_internal/* there.
+  // device-login token is only scoped to /copilot_internal/user there.
   modelDomains: [
     'api.githubcopilot.com',
     'api.individual.githubcopilot.com',

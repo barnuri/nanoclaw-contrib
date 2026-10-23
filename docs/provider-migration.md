@@ -25,11 +25,10 @@ pnpm exec tsx scripts/copilot-login.ts [--login <github-login>] [--relogin]
 
 The script runs `copilot login` when no token is stored, asks GitHub which
 Copilot API endpoint the account is licensed for (individual, business, or
-enterprise), and stores two scoped gateway secrets: `api.github.com` limited to
-`/copilot_internal/*`, because the token can carry repository scopes, and the
-account's Copilot API host. It pins `COPILOT_API_URL` in `.env`. For business
-and enterprise accounts it also adds a gateway rule that blocks
-`api.individual.githubcopilot.com`. Re-run it after a new device login.
+enterprise), and saves two credentials through the gateway for the `copilot`
+provider: `api.github.com` limited to `/copilot_internal/user`, because the
+token can carry repository scopes, and the account's Copilot API host. It pins
+`COPILOT_API_URL` in `.env`. Re-run it after a new device login.
 `COPILOT_MODEL` optionally overrides the model; otherwise the provider requests
 `auto`, which picks a model the subscription allows.
 

@@ -25,10 +25,10 @@ If `DEFAULT_AGENT_PROVIDER=copilot` is saved in `.env`, change only that key to
 `claude` or another installed provider before restarting the host. Then remove
 unused Copilot settings such as `COPILOT_MODEL` and `COPILOT_API_URL`.
 
-Gateway secrets and OneCLI rules are user data. Remove them only when the
-operator explicitly requests it. The helper creates secrets named
-`Copilot GitHub (copilot_internal)` and `Copilot API`, and a rule named
-`Block Copilot individual endpoint`.
+Gateway credentials are user data. Remove them only when the operator explicitly
+requests it. The helper saves credentials named `Copilot GitHub` and
+`Copilot API`. Earlier versions also created `Copilot GitHub (copilot_internal)`
+and a rule named `Block Copilot individual endpoint`; both are unused now.
 
 Run:
 

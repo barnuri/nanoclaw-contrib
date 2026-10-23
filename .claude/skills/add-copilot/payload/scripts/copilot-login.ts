@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,14 +6,15 @@ import { pathToFileURL } from 'node:url';
 
 import { getCredentialStore, type GatewayCredentialTarget } from '../setup/gateways/credential-store.js';
 import { upsertEnvVar } from '../setup/set-env.js';
-import { readEnvFile } from '../src/env.js';
 
-export const INDIVIDUAL_COPILOT_API_HOST = 'api.individual.githubcopilot.com';
 const KEYCHAIN_SERVICE = 'copilot-cli';
 const GITHUB_HOST = 'https://github.com';
-export const COPILOT_INTERNAL_SECRET = 'Copilot GitHub (copilot_internal)';
+export const COPILOT_GITHUB_SECRET = 'Copilot GitHub';
 export const COPILOT_API_SECRET = 'Copilot API';
-export const COPILOT_BLOCK_RULE = 'Block Copilot individual endpoint';
+/** The agent provider these credentials belong to; per-agent gateways grant them to its groups. */
+export const COPILOT_PROVIDER = 'copilot';
+/** The one api.github.com path the pinned Copilot CLI calls with the device-login token. */
+export const COPILOT_GITHUB_PATH = '/copilot_internal/user';
 /** Must equal `COPILOT_GATEWAY_PLACEHOLDER` in the container provider (a test keeps them in sync). */
 export const COPILOT_CREDENTIAL_PLACEHOLDER = 'nanoclaw-gateway-placeholder';
 const USAGE = 'Usage: pnpm exec tsx scripts/copilot-login.ts [--login <github-login>] [--relogin]';
@@ -74,39 +75,36 @@ export function copilotApiTarget(apiUrl: string): GatewayCredentialTarget {
     kind: 'api-key',
     host: new URL(apiUrl).hostname,
     proxyValue: COPILOT_CREDENTIAL_PLACEHOLDER,
+    provider: COPILOT_PROVIDER,
     injection: { headerName: 'Authorization', valueFormat: 'Bearer {value}' },
   };
 }
 
-async function saveCopilotApiToken(apiUrl: string, token: string): Promise<void> {
+/**
+ * api.github.com takes the token on one exact path only: the token also carries
+ * the account's repo scopes, so it must not reach the rest of the host.
+ */
+export function copilotGitHubTarget(): GatewayCredentialTarget {
+  return {
+    name: COPILOT_GITHUB_SECRET,
+    kind: 'api-key',
+    host: 'api.github.com',
+    path: COPILOT_GITHUB_PATH,
+    proxyValue: COPILOT_CREDENTIAL_PLACEHOLDER,
+    provider: COPILOT_PROVIDER,
+    injection: { headerName: 'Authorization', valueFormat: 'token {value}' },
+  };
+}
+
+async function saveCopilotTokens(apiUrl: string, token: string): Promise<void> {
   const store = await getCredentialStore();
   if (!store.connection) throw new Error('The selected gateway does not support provider credential connections.');
-  const connection = store.connection(copilotApiTarget(apiUrl));
-  // A plan change moves the licensed host (individual ↔ business/enterprise); follow it.
-  await connection.find({ confirmHostChange: async () => true });
-  await connection.save(token);
-}
-
-function onecli<T>(args: string[]): T {
-  return JSON.parse(execFileSync('onecli', args, { encoding: 'utf8' })) as T;
-}
-
-function listNamed(kind: 'secrets' | 'rules'): Array<{ id: string; name: string }> {
-  const result = onecli<Array<{ id: string; name: string }> | { data: Array<{ id: string; name: string }> }>([
-    kind,
-    'list',
-    '--fields',
-    'id,name',
-  ]);
-  return Array.isArray(result) ? result : result.data;
-}
-
-// Create before deleting so a failed create leaves the previous secret working.
-function replaceSecret(name: string, tokenFile: string, args: string[]): void {
-  const previous = listNamed('secrets').filter((secret) => secret.name === name);
-  onecli(['secrets', 'create', '--name', name, '--type', 'generic', '--file', tokenFile, ...args]);
-  for (const secret of previous) {
-    onecli(['secrets', 'delete', '--id', secret.id]);
+  if (!store.connectionPaths) throw new Error('The selected gateway cannot limit a credential to one path.');
+  for (const target of [copilotGitHubTarget(), copilotApiTarget(apiUrl)]) {
+    const connection = store.connection(target);
+    // A plan change moves the licensed host (individual ↔ business/enterprise); follow it.
+    await connection.find({ confirmHostChange: async () => true });
+    await connection.save(token);
   }
 }
 
@@ -116,12 +114,6 @@ export async function runCopilotLogin(args = process.argv.slice(2)): Promise<voi
   if (args.includes('--help') || (loginFlag >= 0 && !args[loginFlag + 1])) {
     console.log(USAGE);
     return;
-  }
-
-  const gateway =
-    process.env.NANOCLAW_GATEWAY_PROVIDER ?? readEnvFile(['NANOCLAW_GATEWAY_PROVIDER']).NANOCLAW_GATEWAY_PROVIDER;
-  if (gateway !== 'onecli') {
-    throw new Error(`Copilot gateway login supports OneCLI only (selected: ${gateway ?? 'none'})`);
   }
 
   if (relogin) {
@@ -141,7 +133,7 @@ export async function runCopilotLogin(args = process.argv.slice(2)): Promise<voi
     throw new Error('No Copilot device-login token found after login');
   }
 
-  const response = await fetch('https://api.github.com/copilot_internal/user', {
+  const response = await fetch(`https://api.github.com${COPILOT_GITHUB_PATH}`, {
     headers: { Authorization: `token ${token}`, Accept: 'application/json' },
   });
   if (!response.ok) {
@@ -149,50 +141,7 @@ export async function runCopilotLogin(args = process.argv.slice(2)): Promise<voi
   }
   const account = parseCopilotAccount(await response.json());
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-login-'));
-  const tokenFile = path.join(dir, 'token');
-  try {
-    fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-    // Gateway-specific on purpose: the Copilot CLI calls several undocumented paths
-    // under /copilot_internal/ (token exchange, user, entitlement checks; the set moves
-    // between CLI versions), and the neutral seam scopes a credential to one exact path.
-    // The token also carries repo scopes, so api.github.com injection must stay
-    // path-scoped rather than host-wide.
-    replaceSecret(COPILOT_INTERNAL_SECRET, tokenFile, [
-      '--host-pattern',
-      'api.github.com',
-      '--path-pattern',
-      '/copilot_internal/*',
-      '--header-name',
-      'Authorization',
-      '--value-format',
-      'token {value}',
-    ]);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  await saveCopilotApiToken(account.apiUrl, token);
-
-  // A block rule has no gateway-neutral form yet; OneCLI-specific like the path-scoped secret above.
-  const individual = new URL(account.apiUrl).hostname === INDIVIDUAL_COPILOT_API_HOST;
-  const blockRules = listNamed('rules').filter((rule) => rule.name === COPILOT_BLOCK_RULE);
-  if (individual) {
-    for (const rule of blockRules) {
-      onecli(['rules', 'delete', '--id', rule.id]);
-    }
-  } else if (blockRules.length === 0) {
-    onecli([
-      'rules',
-      'create',
-      '--name',
-      COPILOT_BLOCK_RULE,
-      '--host-pattern',
-      INDIVIDUAL_COPILOT_API_HOST,
-      '--action',
-      'block',
-      '--enabled',
-    ]);
-  }
+  await saveCopilotTokens(account.apiUrl, token);
   upsertEnvVar('COPILOT_API_URL', account.apiUrl);
 
   console.log(`Copilot connected for ${login} (${account.plan}) via ${account.apiUrl}.`);

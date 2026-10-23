@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 import {
   COPILOT_API_SECRET,
   COPILOT_CREDENTIAL_PLACEHOLDER,
+  COPILOT_GITHUB_SECRET,
   copilotApiTarget,
+  copilotGitHubTarget,
   lastCopilotLogin,
   parseCopilotAccount,
 } from './copilot-login.js';
@@ -50,8 +52,13 @@ describe('copilotApiTarget', () => {
       kind: 'api-key',
       host: 'api.business.githubcopilot.com',
       proxyValue: COPILOT_CREDENTIAL_PLACEHOLDER,
+      provider: 'copilot',
       injection: { headerName: 'Authorization', valueFormat: 'Bearer {value}' },
     });
+  });
+
+  it('names the provider so per-agent gateways grant it to Copilot groups', () => {
+    expect(copilotApiTarget('https://api.individual.githubcopilot.com').provider).toBe('copilot');
   });
 
   it('uses the placeholder the container provider sends', () => {
@@ -60,5 +67,19 @@ describe('copilotApiTarget', () => {
     expect(fs.readFileSync(source, 'utf8')).toContain(
       `COPILOT_GATEWAY_PLACEHOLDER = '${COPILOT_CREDENTIAL_PLACEHOLDER}'`,
     );
+  });
+});
+
+describe('copilotGitHubTarget', () => {
+  it('limits api.github.com to the one Copilot path, for the copilot provider', () => {
+    expect(copilotGitHubTarget()).toEqual({
+      name: COPILOT_GITHUB_SECRET,
+      kind: 'api-key',
+      host: 'api.github.com',
+      path: '/copilot_internal/user',
+      proxyValue: COPILOT_CREDENTIAL_PLACEHOLDER,
+      provider: 'copilot',
+      injection: { headerName: 'Authorization', valueFormat: 'token {value}' },
+    });
   });
 });
