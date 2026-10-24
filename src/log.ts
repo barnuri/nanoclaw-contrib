@@ -89,8 +89,8 @@ function safeStringify(v: unknown): string {
   /* eslint-enable no-catch-all/no-catch-all */
 }
 
-// `err` stays readable as multi-line text; a cause or AggregateError member is
-// indented under the error that wraps it.
+// `err` keeps its one-line shape; each cause and AggregateError member follows
+// on its own line.
 function formatErr(err: unknown, depth = 0): string {
   if (!(err instanceof Error)) return safeStringify(err);
   const fields = errorFields(err);
